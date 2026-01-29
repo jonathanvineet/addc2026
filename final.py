@@ -153,11 +153,14 @@ def detect_qr_codes():
         except:
             continue
         
+        # Keep original color frame for display
+        display_frame = frame.copy()
+        
         decoded_objects = qreader.detect_and_decode(frame)
         
         result = {
             'frame_id': frame_id,
-            'frame': frame,
+            'frame': display_frame,  # Use original color frame
             'decoded_objects': decoded_objects
         }
         
