@@ -6,6 +6,8 @@ from qreader import QReader
 import threading
 from queue import Queue
 import numpy as np
+from flask import Flask, Response
+import io
 
 # ================= CONFIG =================
 
@@ -24,6 +26,10 @@ SERVO_TRIGGER = 7.5
 # Parallel processing config
 FRAME_QUEUE_SIZE = 10
 NUM_DETECTION_THREADS = 2
+
+# Web server config
+FLASK_HOST = '0.0.0.0'
+FLASK_PORT = 5000
 
 # =========================================
 
@@ -83,6 +89,42 @@ detection_complete = False
 
 print("[INFO] QR scanning started")
 
+# ================= FLASK WEB SERVER =================
+
+app = Flask(__name__)
+
+# Shared frame for streaming
+current_frame = None
+frame_lock = threading.Lock()
+
+@app.route('/video_feed')
+def video_feed():
+    """Stream video frames as MJPEG"""
+    def generate():
+        while not should_stop and not detection_complete:
+            with frame_lock:
+                if current_frame is not None:
+                    _, buffer = cv2.imencode('.jpg', current_frame)
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n'
+                           b'Content-Length: ' + str(len(frame_bytes)).encode() + b'\r\n\r\n'
+                           + frame_bytes + b'\r\n')
+            time.sleep(0.03)  # ~30 FPS
+    
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/status')
+def status():
+    """Get current QR detection status"""
+    return {
+        'qr_count': qr_count,
+        'target_frames': QR_CONFIRM_FRAMES,
+        'detection_complete': detection_complete
+    }
+
+print("[INFO] Flask app configured")
+
 # ================= CAPTURE PIPELINE =================
 
 def capture_frames():
@@ -121,6 +163,12 @@ def detect_qr_codes():
         
         result_queue.put(result)
 
+# ================= WEB SERVER THREAD =================
+
+def run_flask():
+    """Run Flask web server"""
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)
+
 # ================= MAIN CONTROL LOOP =================
 
 # Start capture thread
@@ -134,13 +182,23 @@ for i in range(NUM_DETECTION_THREADS):
     thread.start()
     detection_threads.append(thread)
 
+# Start Flask web server
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+
 print("[INFO] Parallel pipelines started")
+print(f"[INFO] Video stream available at http://0.0.0.0:{FLASK_PORT}/video_feed")
+print(f"[INFO] Status available at http://0.0.0.0:{FLASK_PORT}/status")
 
 while True:
     try:
         result = result_queue.get(timeout=1)
         frame = result['frame']
         decoded_objects = result['decoded_objects']
+
+        # Update current frame for streaming
+        with frame_lock:
+            current_frame = frame.copy()
 
         if decoded_objects:
             for obj in decoded_objects:
