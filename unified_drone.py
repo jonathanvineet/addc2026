@@ -45,13 +45,29 @@ FLASK_HOST = '0.0.0.0'
 FLASK_PORT = 5000
 
 # Windows Server API
-WINDOWS_SERVER_IP = "192.168.1.28"
+WINDOWS_SERVER_IP = "192.168.43.24"
 WINDOWS_SERVER_PORT = 5000
 WINDOWS_SERVER_URL = f'http://{WINDOWS_SERVER_IP}:{WINDOWS_SERVER_PORT}'
 JPEG_QUALITY = 85
 SEND_TO_WINDOWS = True  # Set to False to disable sending to Windows server
 
+# Logging
+LOG_FILE = f"drone_log_{int(time.time())}.txt"
+
 # =========================================
+
+# ================= LOGGING SETUP =================
+
+def log_message(message, also_print=True):
+    """Log message to file and optionally print to console"""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {message}\n"
+    
+    with open(LOG_FILE, 'a') as f:
+        f.write(log_entry)
+    
+    if also_print:
+        print(message)
 
 # ================= GPIO SETUP =================
 
@@ -62,7 +78,7 @@ servo = GPIO.PWM(SERVO_GPIO, SERVO_FREQ)
 servo.start(0)
 
 def trigger_servo():
-    print("[ACTION] Servo triggered")
+    log_message("[ACTION] Servo triggered")
     servo.ChangeDutyCycle(SERVO_TRIGGER)
     time.sleep(1.2)
     servo.ChangeDutyCycle(SERVO_NEUTRAL)
@@ -71,10 +87,10 @@ def trigger_servo():
 
 # ================= MAVLINK =================
 
-print("[INFO] Connecting to Pixhawk...")
+log_message("[INFO] Connecting to Pixhawk...")
 master = mavutil.mavlink_connection(PORT)
 master.wait_heartbeat()
-print("[OK] Heartbeat received")
+log_message("[OK] Heartbeat received")
 
 def send_rtl():
     if(master.mav.command_long_send(
@@ -84,13 +100,13 @@ def send_rtl():
         0,
         0, 0, 0, 0, 0, 0, 0
     )):
-        print("[ACTION] RTL sent")
+        log_message("[ACTION] RTL sent")
     else:
-        print("[ERROR] Failed to send RTL")
+        log_message("[ERROR] Failed to send RTL")
 
 # ================= CAMERA =================
 
-print("[INFO] Initializing camera...")
+log_message("[INFO] Initializing camera...")
 cap = cv2.VideoCapture(CAMERA_ID)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
@@ -102,7 +118,7 @@ if not cap.isOpened():
 
 actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-print(f"[OK] Camera ready: {actual_width}x{actual_height}")
+log_message(f"[OK] Camera ready: {actual_width}x{actual_height}")
 
 # pyzbar doesn't need initialization
 
@@ -121,11 +137,15 @@ session_id = f"drone_{int(time.time())}"
 current_frame = None
 frame_lock = threading.Lock()
 
+# Shared QR code content
+last_qr_content = None
+qr_content_lock = threading.Lock()
+
 # Stats
 frames_sent_to_windows = 0
 windows_send_errors = 0
 
-print("[INFO] System initialized")
+log_message("[INFO] System initialized")
 
 # ================= FLASK WEB SERVER =================
 
@@ -164,13 +184,22 @@ def health():
     """Health check endpoint"""
     return {'status': 'running', 'timestamp': time.time()}
 
-print("[INFO] Flask app configured")
+@app.route('/qr_content')
+def qr_content():
+    """Get the last scanned QR code content"""
+    with qr_content_lock:
+        return {
+            'qr_content': last_qr_content,
+            'timestamp': time.time()
+        }
+
+log_message("[INFO] Flask app configured")
 
 # ================= CAPTURE PIPELINE =================
 
 def capture_frames():
     """Continuously capture frames from camera - SINGLE SOURCE FOR ALL"""
-    global should_stop
+    global should_stop, current_frame
     frame_id = 0
     
     while not should_stop:
@@ -184,13 +213,18 @@ def capture_frames():
         with frame_lock:
             current_frame = frame.copy()
         
-        # Send to QR detection pipeline
-        if not frame_queue.full():
-            frame_queue.put((frame_id, frame.copy()))
+        # Send to QR detection pipeline (with timeout to avoid blocking)
+        try:
+            frame_queue.put((frame_id, frame.copy()), timeout=0.1)
+        except:
+            pass  # Skip frame if queue is full
         
         # Send to Windows server pipeline
-        if SEND_TO_WINDOWS and not windows_queue.full():
-            windows_queue.put((frame_id, frame.copy()))
+        if SEND_TO_WINDOWS:
+            try:
+                windows_queue.put((frame_id, frame.copy()), timeout=0.1)
+            except:
+                pass  # Skip frame if queue is full
 
 # ================= QR DETECTION PIPELINE =================
 
@@ -285,24 +319,25 @@ def print_stats():
 # ================= MAIN CONTROL LOOP =================
 
 def main():
-    global should_stop, detection_complete, qr_count
+    global should_stop, detection_complete, qr_count, last_qr_content
     
-    print("\n" + "="*70)
-    print("🚁 UNIFIED DRONE CONTROLLER")
-    print("="*70)
-    print(f"📡 Mavlink: {PORT}")
-    print(f"🔌 Servo GPIO: {SERVO_GPIO}")
-    print(f"📹 Camera: {actual_width}x{actual_height}")
-    print(f"🌐 Flask streaming: http://{FLASK_HOST}:{FLASK_PORT}/video_feed")
-    print(f"📊 Status API: http://{FLASK_HOST}:{FLASK_PORT}/status")
+    log_message("\n" + "="*70)
+    log_message("🚁 UNIFIED DRONE CONTROLLER")
+    log_message("="*70)
+    log_message(f"📡 Mavlink: {PORT}")
+    log_message(f"🔌 Servo GPIO: {SERVO_GPIO}")
+    log_message(f"📹 Camera: {actual_width}x{actual_height}")
+    log_message(f"🌐 Flask streaming: http://{FLASK_HOST}:{FLASK_PORT}/video_feed")
+    log_message(f"📊 Status API: http://{FLASK_HOST}:{FLASK_PORT}/status")
+    log_message(f"📄 Log file: {LOG_FILE}")
     if SEND_TO_WINDOWS:
-        print(f"💻 Windows server: {WINDOWS_SERVER_URL}")
-    print("="*70 + "\n")
+        log_message(f"💻 Windows server: {WINDOWS_SERVER_URL}")
+    log_message("="*70 + "\n")
     
     # Start capture thread (SINGLE camera feed for all)
     capture_thread = threading.Thread(target=capture_frames, daemon=True)
     capture_thread.start()
-    print("[OK] Camera capture pipeline started")
+    log_message("[OK] Camera capture pipeline started")
     
     # Start QR detection threads
     detection_threads = []
@@ -310,24 +345,24 @@ def main():
         thread = threading.Thread(target=detect_qr_codes, daemon=True)
         thread.start()
         detection_threads.append(thread)
-    print(f"[OK] QR detection pipeline started ({NUM_DETECTION_THREADS} threads)")
+    log_message(f"[OK] QR detection pipeline started ({NUM_DETECTION_THREADS} threads)")
     
     # Start Windows server thread
     if SEND_TO_WINDOWS:
         windows_thread = threading.Thread(target=send_to_windows_server, daemon=True)
         windows_thread.start()
-        print("[OK] Windows server pipeline started")
+        log_message("[OK] Windows server pipeline started")
     
     # Start Flask web server
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    print("[OK] Flask web server started")
+    log_message("[OK] Flask web server started")
     
     # Start stats thread
     stats_thread = threading.Thread(target=print_stats, daemon=True)
     stats_thread.start()
     
-    print("\n[INFO] All systems operational! Waiting for QR code...\n")
+    log_message("\n[INFO] All systems operational! Waiting for QR code...\n")
     
     # Main processing loop
     while True:
@@ -340,12 +375,18 @@ def main():
                 for data in decoded_objects:
                     # data is already a string from pyzbar
                     
+                    # Update the last scanned QR content
+                    with qr_content_lock:
+                        last_qr_content = data
+                    log_message(f"[QR SCANNED] Content: {data}")
+                    log_message(f"[QR SCANNED] Raw data: {repr(data)}")
+                    
                     if data.strip() == VALID_QR_TEXT:
                         qr_count += 1
-                        print(f"[DEBUG] Valid QR ({qr_count}/{QR_CONFIRM_FRAMES})")
+                        log_message(f"[DEBUG] Valid QR ({qr_count}/{QR_CONFIRM_FRAMES})")
                         
                         if qr_count >= QR_CONFIRM_FRAMES:
-                            print("\n[OK] ✅ QR CONFIRMED!")
+                            log_message("\n[OK] ✅ QR CONFIRMED!")
                             detection_complete = True
                             should_stop = True
                             
@@ -360,7 +401,7 @@ def main():
             cv2.imshow("Unified Drone Controller", frame)
             
             if cv2.waitKey(1) & 0xFF == 27:
-                print("\n[ABORT] User stopped (ESC key)")
+                log_message("\n[ABORT] User stopped (ESC key)")
                 should_stop = True
                 break
             
@@ -368,7 +409,7 @@ def main():
                 break
         
         except KeyboardInterrupt:
-            print("\n[ABORT] User stopped (Ctrl+C)")
+            log_message("\n[ABORT] User stopped (Ctrl+C)")
             should_stop = True
             break
         except:
@@ -376,7 +417,7 @@ def main():
     
     # ================= CLEANUP =================
     
-    print("\n[INFO] Shutting down...")
+    log_message("\n[INFO] Shutting down...")
     time.sleep(1)  # Give threads time to finish
     
     cap.release()
@@ -384,8 +425,14 @@ def main():
     servo.stop()
     GPIO.cleanup()
     
-    print("[DONE] ✅ All systems stopped")
-    print(f"[STATS] Final - Windows frames sent: {frames_sent_to_windows}, Errors: {windows_send_errors}\n")
+    log_message("[DONE] ✅ All systems stopped")
+    log_message(f"[STATS] Final - Windows frames sent: {frames_sent_to_windows}, Errors: {windows_send_errors}")
+    
+    # Write final QR content summary
+    with qr_content_lock:
+        if last_qr_content:
+            log_message(f"\n[FINAL QR CONTENT] {last_qr_content}")
+            log_message(f"Log file saved: {LOG_FILE}\n")
 
 if __name__ == '__main__':
     main()
