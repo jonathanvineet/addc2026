@@ -25,7 +25,8 @@ sudo apt-get install -y python3-numpy
 
 # Reinstall other dependencies via pip (safe ones)
 echo "[5/5] Installing remaining dependencies..."
-pip3 install pymavlink qreader flask requests RPi.GPIO
+sudo apt-get install -y libzbar0
+pip3 install pymavlink pyzbar flask requests RPi.GPIO
 
 echo ""
 echo "========================================="

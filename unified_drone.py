@@ -24,7 +24,7 @@ PORT = '/dev/ttyACM0'
 
 # QR Detection
 VALID_QR_TEXT = "SCANNED"
-QR_CONFIRM_FRAMES = 8
+QR_CONFIRM_FRAMES = 2
 
 # Servo
 SERVO_GPIO = 18        # BCM pin
