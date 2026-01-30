@@ -63,6 +63,9 @@ WINDOWS_SERVER_URL = f'http://{WINDOWS_SERVER_IP}:{WINDOWS_SERVER_PORT}'
 JPEG_QUALITY = 85
 SEND_TO_WINDOWS = True  # Set to False to disable sending to Windows server
 
+# Display Mode
+HEADLESS_MODE = True  # Set to True for boot operation (no cv2.imshow), False for testing with monitor
+
 # Logging
 LOG_FILE = f"drone_log_{int(time.time())}.txt"
 
@@ -437,13 +440,14 @@ def main():
                     else:
                         qr_count = 0
             
-            # Show frame locally (optional, can disable on headless)
-            cv2.imshow("Unified Drone Controller", frame)
-            
-            if cv2.waitKey(1) & 0xFF == 27:
-                log_message("User stopped (ESC key)", also_print=False)
-                should_stop = True
-                break
+            # Show frame locally (only if not headless)
+            if not HEADLESS_MODE:
+                cv2.imshow("Unified Drone Controller", frame)
+                
+                if cv2.waitKey(1) & 0xFF == 27:
+                    log_message("User stopped (ESC key)", also_print=False)
+                    should_stop = True
+                    break
             
             if detection_complete:
                 break
@@ -461,7 +465,8 @@ def main():
     time.sleep(1)  # Give threads time to finish
     
     cap.release()
-    cv2.destroyAllWindows()
+    if not HEADLESS_MODE:
+        cv2.destroyAllWindows()
     servo.stop()
     GPIO.cleanup()
     
