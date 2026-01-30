@@ -9,7 +9,7 @@ from pymavlink import mavutil
 import cv2
 import time
 import RPi.GPIO as GPIO
-from qreader import QReader
+from pyzbar.pyzbar import decode
 import threading
 from queue import Queue
 import numpy as np
@@ -104,7 +104,7 @@ actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 print(f"[OK] Camera ready: {actual_width}x{actual_height}")
 
-qreader = QReader()
+# pyzbar doesn't need initialization
 
 # Thread-safe queues for parallel processing
 frame_queue = Queue(maxsize=FRAME_QUEUE_SIZE)
@@ -207,12 +207,16 @@ def detect_qr_codes():
         # Keep original color frame for display
         display_frame = frame.copy()
         
-        decoded_objects = qreader.detect_and_decode(frame)
+        # Use pyzbar to decode QR codes
+        decoded_objects = decode(frame)
+        
+        # Extract text from pyzbar objects
+        decoded_texts = [obj.data.decode('utf-8') for obj in decoded_objects]
         
         result = {
             'frame_id': frame_id,
             'frame': display_frame,
-            'decoded_objects': decoded_objects
+            'decoded_objects': decoded_texts
         }
         
         result_queue.put(result)
@@ -333,8 +337,8 @@ def main():
             decoded_objects = result['decoded_objects']
             
             if decoded_objects:
-                for obj in decoded_objects:
-                    data = obj
+                for data in decoded_objects:
+                    # data is already a string from pyzbar
                     
                     if data.strip() == VALID_QR_TEXT:
                         qr_count += 1

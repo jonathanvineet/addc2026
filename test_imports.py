@@ -14,7 +14,7 @@ imports_to_test = [
     ("cv2", "import cv2"),
     ("time", "import time"),
     ("RPi.GPIO", "import RPi.GPIO as GPIO"),
-    ("qreader", "from qreader import QReader"),
+    ("pyzbar", "from pyzbar.pyzbar import decode"),
     ("threading", "import threading"),
     ("queue", "from queue import Queue"),
     ("numpy", "import numpy as np"),
